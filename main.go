@@ -37,7 +37,6 @@ Echo works a lot like print, except it has a child command.`,
 			os.Exit(1)
 		}
 		tbl()
-
 	},
 }
 
