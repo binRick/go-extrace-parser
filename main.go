@@ -4,59 +4,46 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/k0kubun/pp"
-	"github.com/urfave/cli/v2"
+	"github.com/spf13/cobra"
 	"github.com/vektra/tai64n"
 )
 
+var LOG_FILE_PATH = ``
+var cmdParse = &cobra.Command{
+	Use:   "parse [string to parse]",
+	Short: "Parse Log File",
+	Long: `parse is for parse anything back.
+Echo works a lot like print, except it has a child command.`,
+	Args: cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		LOG_FILE_PATH := args[0]
+		_log, err := loadExtraceLogFile(LOG_FILE_PATH)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		err = parse_log(_log)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		tbl()
+
+	},
+}
+
 func main() {
-	app := &cli.App{
-		Name:  "extrace-parser",
-		Usage: "Extrace Log Parser",
-		Commands: []*cli.Command{
-			{
-				Name:    "log",
-				Aliases: []string{"l"},
-				Usage:   "Log",
-				Subcommands: []*cli.Command{
-					{
-						Name:      "parse",
-						Aliases:   []string{"p"},
-						Usage:     "Parse Extrace Log to JSON",
-						ArgsUsage: "FILE",
-						Action: func(c *cli.Context) error {
-							//pp.Println(c.Args())
-							_log, err := loadExtraceLogFile(c.Args().Get(0))
-							if err != nil {
-								fmt.Println(err)
-								os.Exit(1)
-							}
-							fmt.Println(len(_log), " bytes")
-							fmt.Println(len(strings.Split(string(_log), "\n")), " lines")
-							err = parse_log(_log)
-							if err != nil {
-								fmt.Println(err)
-								os.Exit(1)
-							}
-
-							return nil
-						},
-					},
-				},
-			},
-		},
-	}
-
-	err := app.Run(os.Args)
-	if err != nil {
-		log.Fatal(err)
-	}
+	rootCmd.AddCommand(cmdParse)
+	rootCmd.Execute()
 }
 
 var started_extrace_events = map[int64]ExtraceEvent{}
@@ -77,8 +64,10 @@ type ExtraceEvent struct {
 	EndEventTai64 time.Time
 }
 
+func (EE *ExtraceEvent) GetExecBase() string {
+	return filepath.Base(EE.Exec)
+}
 func ParseLine(line string) error {
-	//	pp.Println(tai64n.ParseTAI64NLabel(`@400000006134298d0ce3b884`).Time())
 
 	items := strings.Split(line, ` `)
 	if len(items) < 3 {
@@ -102,10 +91,11 @@ func ParseLine(line string) error {
 		eu = strings.Replace(items[2], `<`, ``, 1)
 		eu = strings.Replace(eu, `>`, ``, 1)
 		EE = items[3]
+		//		pp.Println(items)
 		if len(items) == 5 {
 			EA = []string{items[4]}
-		} else if len(items) > 4 {
-			EA = items[4 : len(items)-1]
+		} else if len(items) > 5 {
+			EA = items[4:len(items)]
 		}
 		ES = fmt.Sprintf(`%s %s`, EE, strings.Join(EA, " "))
 	} else if strings.Contains(items[1], `-`) {
@@ -137,6 +127,7 @@ func ParseLine(line string) error {
 			ExitCode:   ec,
 			EventTai64: e_t,
 		}
+		//pp.Println(__EE)
 		if __EE.EventType == `start` {
 			started_extrace_events[__pid] = __EE
 		} else {
@@ -151,16 +142,19 @@ func ParseLine(line string) error {
 	return nil
 }
 
+func GetExtraceEventPids() (pids []int64) {
+	for pid := range started_extrace_events {
+		pids = append(pids, pid)
+	}
+	return pids
+}
+
 func parse_log(log_data []byte) error {
 	start := time.Now()
-	show_qty := 20
 	lines := strings.Split(string(log_data), "\n")
-	for l_no, l := range lines {
+	for _, l := range lines {
 		if len(l) == 0 {
 			continue
-		}
-		if l_no < show_qty || l_no > (len(lines)-show_qty) {
-			//pp.Println(l_no, l)
 		}
 		err := ParseLine(l)
 		if err != nil {
@@ -170,19 +164,87 @@ func parse_log(log_data []byte) error {
 	qty := 0
 	tqty := 0
 	for _, _ = range started_extrace_events {
-		tqty = 1
+		tqty += 1
 	}
+	qty = 0
 	for _, E := range started_extrace_events {
-		qty += 1
 		if qty < 10 || qty > (tqty-10) {
-			pp.Println(E)
+			if false {
+				pp.Println(E)
+			}
 		}
 		qty += 1
 	}
-	msg := fmt.Sprintf("Parsed %d Events from %d Lines in %s", qty, len(lines), time.Since(start))
+	msg := fmt.Sprintf(`Parsed %d Events from %s containing %s Bytes, %d Lines, %d PIDs in %s.|`,
+		qty,
+		LOG_FILE_PATH,
+		humanize.Bytes(uint64(len(log_data))),
+		len(lines),
+		len(GetExtraceEventPids()),
+		time.Since(start),
+	)
 	fmt.Println(msg)
+	GetExtraceEventExecs()
+	//ExtraceEventExecsReport()
+
 	return nil
 }
+
+var ExecPIDs = map[string][]int64{}
+var PIDsQtyExecs = map[int64]string{}
+
+func ExtraceEventExecsReport() {
+	for exec_bin, pids := range ExecPIDs {
+		msg := fmt.Sprintf(`%s => %d`, exec_bin, len(pids))
+		fmt.Println(msg)
+	}
+}
+
+type Pair struct {
+	Key   string
+	Value int
+}
+
+type PairList []Pair
+
+func (p PairList) Len() int           { return len(p) }
+func (p PairList) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+func (p PairList) Less(i, j int) bool { return p[i].Value > p[j].Value }
+
+func GetExtraceEventExecs() {
+	ExecPIDs = map[string][]int64{}
+	for _, E := range started_extrace_events {
+		_, h := ExecPIDs[E.GetExecBase()]
+		if !h {
+			ExecPIDs[E.GetExecBase()] = []int64{E.PID}
+		} else {
+			ExecPIDs[E.GetExecBase()] = append(ExecPIDs[E.GetExecBase()], E.PID)
+		}
+	}
+
+	p := make(PairList, len(ExecPIDs))
+
+	i := 0
+	for k, v := range ExecPIDs {
+		p[i] = Pair{k, len(v)}
+		i++
+	}
+
+	sort.Sort(p)
+	exec_qtys = []ExecQty{}
+	for _, k := range p {
+		exec_qtys = append(exec_qtys, ExecQty{Exec: k.Key, Qty: k.Value})
+	}
+	//pp.Println(exec_qtys[1:5])
+}
+
+var exec_qtys = []ExecQty{}
+
+type ExecQty struct {
+	Exec string
+	Qty  int
+}
+
 func loadExtraceLogFile(filePath string) ([]byte, error) {
 	return ioutil.ReadFile(filePath)
 
