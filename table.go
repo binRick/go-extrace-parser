@@ -29,7 +29,7 @@ func tbl() {
 		tablewriter.Colors{tablewriter.FgHiYellowColor, tablewriter.Bold, tablewriter.BgBlackColor},
 		tablewriter.Colors{tablewriter.FgHiYellowColor, tablewriter.Bold, tablewriter.BgBlackColor},
 	)
-	for _, i := range exec_qtys[1:5] {
+	for _, i := range exec_qtys[0:19] {
 		tbl.Append([]string{
 			fmt.Sprintf("%s",
 				i.Exec,
